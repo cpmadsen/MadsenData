@@ -28,12 +28,39 @@ editor_options:
 library(flexdashboard)
 library(bslib)
 library(tidyverse)
+library(htmltools)
+library(bslib)
+library(bsicons)
+library(summarywidget)
 library(plotly)
 library(lubridate)
 library(scales)
 library(crosstalk)
 
 knitr::opts_chunk$set(warning = F,message = F)
+```
+
+```{r}
+valueBoxSummaryWidget <- function (value, caption = NULL, icon = NULL, color = NULL, href = NULL) 
+{
+  if (!is.null(color) && color %in% c("primary", "info", 
+                                      "success", "warning", "danger")) 
+    color <- paste0("bg-", color)
+  valueOutput <- tags$span(class = "value-summarywidget-output", `data-caption` = caption, 
+                           `data-icon` = icon, `data-color` = color, 
+                           `data-href` = href, value)
+  hasPrefix <- function(x, prefix) {
+    if (!is.null(x)) 
+      grepl(paste0("^", prefix), x)
+    else FALSE
+  }
+  fontAwesome <- hasPrefix(icon, "fa")
+  ionicons <- hasPrefix(icon, "ion")
+  deps <- flexdashboard:::html_dependencies_fonts(fontAwesome, ionicons)
+  if (length(deps) > 0) 
+    valueOutput <- attachDependencies(valueOutput, deps)
+  valueOutput
+}
 ```
 
 ```{r global read_in_data, include = F}
@@ -54,7 +81,9 @@ rock_visit_dat = rock_visit_dat %>%
   map( ~ {
     crossing(.x,1:.x$days_in_month) %>% 
       distinct() %>% 
-      mutate(visits = visits + sample(c(-3:3,1)))
+      mutate(drop_ins = drop_ins +sample(c(-3:3,1)),
+             members = members + sample(c(-3:3,1))) %>% 
+      mutate(visits = drop_ins + members)
   }) %>% 
   bind_rows() %>% 
   mutate(month = factor(month, levels = c("Jan","Feb","Mar","Apr","May","Jun")))
@@ -91,55 +120,76 @@ rock_visit_dat = rock_visit_dat %>%
 
 
 ```{r make_shared_datasets}
-RockVisitDat = SharedData$new(rock_visit_dat)
+
+visits_by_hour = rock_visit_dat %>% 
+  group_by(hour_of_day, membership_type, location) %>% 
+  summarise(mean_visits = round(mean(visits),1))
+
+visits_by_day = rock_visit_dat %>% 
+  group_by(day_as_number, membership_type, location) %>% 
+  summarise(mean_visits = round(mean(visits),1))
+
+visits_by_month = rock_visit_dat %>% 
+  group_by(month_as_number, membership_type, location) %>% 
+  summarise(mean_visits = round(mean(visits),1))
+
+visitsHour = SharedData$new(visits_by_hour)
+visitsDay = SharedData$new(visits_by_day)
+visitsMonth = SharedData$new(visits_by_month)
+
+# RockVisitDat = SharedData$new(rock_visit_dat)
 ```
 
 ```{r design_filters_and_buttons}
-hour_filter = filter_slider('hour_slider', 'Hours to Include', RockVisitDat, ~hour_of_day, min = 6, max = 22)
+hour_filter = filter_slider('hour_slider', 'Hours to Include', visitsHour, ~hour_of_day, min = 6, max = 22)
 
-day_filter = filter_slider('day_slider', 'Days to Include',  RockVisitDat, ~day_as_number, min = 1, max = 7)
+day_filter = filter_slider('day_slider', 'Days to Include',  visitsDay, ~day_as_number, min = 1, max = 7)
 
 month_filter = filter_slider('day_slider',
                              'Months to Include',
-                             RockVisitDat,
+                             visitsMonth,
                              ~month_as_number,
                              min = 2,
                              max = 6)
 
-location_select = filter_select('loc_filter', "Location", RockVisitDat, ~location)
-
-membership_type_select = filter_select("memb_type", "Membership Type", RockVisitDat, ~membership_type)
+# location_select = filter_select('loc_filter', "Location", visitsHour, ~location)
+# 
+# membership_type_select = filter_select("memb_type", "Membership Type", visitsHour, ~membership_type)
 ```
 
 ```{r plotting_functions}
 average_barplot_by_membership_type = function(reactive_data, x_var = NULL, y_var = NULL, grouper = NULL, xlabel = "X", ylabel = "Y", color_set = "Dark2"){
   
-  p = reactive_data %>% 
-    plot_ly(x = ~.data[[x_var]], 
-            y = ~.data[[y_var]],
-            color = ~membership_type,
-            colors = color_set,
-            type = 'bar', 
-            hoverinfo = 'text',
-            hovertext = ~paste0(visits, 
-                                " visits on average"),
-            transforms = list(
-              list(
-                type = 'aggregate',
-                groups = ~.data[[grouper]],
-                aggregations = list(
-                  list(
-                    target = 'y', 
-                    func = 'mean', 
-                    enabled = T
-                  )
-                )
-              )
-            )
-    ) %>% 
-    layout(barmode = 'stack',
-           xaxis = list(title = xlabel),
-           yaxis = list(title = ylabel))
+  p = plot_ly(data = reactive_data,
+              x = ~.data[[x_var]], 
+              y = ~.data[[y_var]],
+              color = ~membership_type,
+              colors = color_set
+              # type = 'bar', 
+              ) %>% 
+    group_by(!!sym(grouper)) %>% 
+    add_bars(hoverinfo = 'text',
+             hovertext = ~paste0(mean_visits, 
+                                  " visits on average")) %>% 
+  #   layout(
+  #         transforms = list(
+  #           list(
+  #             type = 'aggregate',
+  #             groups = ~.data[[grouper]],
+  #             aggregations = list(
+  #               list(
+  #                 target = 'y',
+  #                 func = 'mean',
+  #                 enabled = T
+  #               )
+  #             )
+  #           )
+  #         )
+  # ) %>%
+  layout(barmode = 'stack',
+         showlegend = F,
+         xaxis = list(title = xlabel),
+         yaxis = list(title = ylabel))
   
   p
 }
@@ -147,131 +197,218 @@ average_barplot_by_membership_type = function(reactive_data, x_var = NULL, y_var
 
 Rock Gym is composed of two popular rock climbing gyms located in Victoria and Vancouver, British Columbia, that have been operating for 6 years. Use this dashboard to explore peak visit times by hour, day, or month.
 
-Column {data-width=33%}
-------------------------------------------------------------------
-
-### Filters
-
 ```{r}
-accordion(
-  selected = I("all"),
-  accordion_item(
-    "Sliders",
-    hour_filter,
-    day_filter,
-    month_filter
-  ),
-  accordion_item(
-    "Categories",
-    location_select,
-    membership_type_select
-  )
-)
+# plot_ly(data = aggregate(mean_visits ~ membership_type + hour_of_day, data = visits_by_hour, sum),
+#         x = ~hour_of_day, 
+#         y = ~mean_visits,
+#         color = ~membership_type,
+#         colors = 'Dark2',
+#         hoverinfo = 'text',
+#         hovertext = ~paste0(mean_visits, 
+#                             " visits on average")
+#         ) %>%
+#   add_bars() %>%
+#   layout(barmode = 'stack',
+#          showlegend = F,
+#          xaxis = list(title = 'Hour of Day',
+#                       categoryorder = "array",
+#                       categoryarray = visits_by_hour$hour_of_day),
+#          yaxis = list(title = 'Average Customers'))
 ```
 
-Column {data-width=66% .tabset}
+
+```{r}
+# Column {data-width=33%}
+# ------------------------------------------------------------------
+# 
+# ### Filters
+# accordion(
+#   selected = I("all"),
+#   accordion_item(
+#     "Sliders",
+#     hour_filter,
+#     day_filter,
+#     month_filter
+#   ),
+#   accordion_item(
+#     "Categories",
+#     location_select,
+#     membership_type_select
+#   )
+# )
+```
+
+Column {data-width=100% .tabset}
 -------------------------------------------------------------------
 
 ### By Hour
 
 ```{r}
-average_barplot_by_membership_type(RockVisitDat,
-                                   x_var = 'hour_of_day',
-                                   y_var = 'visits',
-                                   grouper = 'hour_of_day',
-                                   xlabel = "Hour of Day",
-                                   ylabel = "Average Customers")
+bscols(widths = c(4,8),
+       list(
+         accordion(
+           selected = I("all"),
+           accordion_item(
+             "Filters",
+             hour_filter,
+             # location_select,
+             # membership_type_select
+           )
+         ),
+         card_grid(card_width = 1/2,
+                   card(
+                     card_header('Victoria',
+                                 class = "bg-success"),
+                     card_body(
+                       summarywidget(
+                         visitsHour,
+                         statistic = 'sum',
+                         selection = ~location=='Victoria',
+                         column = 'mean_visits',
+                         digits = 0
+                       ),
+                       style = 'font-size:26px'
+                     ),
+                     card_footer('visits per day')
+                   ),
+                   card(
+                     card_header('Vancouver',
+                                 class = "bg-warning"),
+                     card_body(
+                       summarywidget(
+                         visitsHour,
+                         statistic = 'sum',
+                         selection = ~location=='Vancouver',
+                         column = 'mean_visits',
+                         digits = 0
+                       ),
+                       style = 'font-size:26px'
+                     ),
+                     card_footer('visits per day')
+                   )
+         )
+       ),
+       average_barplot_by_membership_type(visitsHour,
+                                          x_var = 'hour_of_day',
+                                          y_var = 'mean_visits',
+                                          grouper = 'hour_of_day',
+                                          xlabel = "Hour of Day",
+                                          ylabel = "Average Customers")
+)
 ```
 
 ### By Day
 ```{r}
-average_barplot_by_membership_type(RockVisitDat,
-                                   x_var = 'day_of_week',
-                                   y_var = 'visits',
-                                   grouper = 'day_as_number',
-                                   xlabel = "Day of Week",
-                                   ylabel = "Average Customers")
+bscols(widths = c(4,8),
+  list(
+    accordion(
+      selected = I("all"),
+      accordion_item(
+        "Filters",
+        day_filter,
+      )
+    ),
+    card_grid(card_width = 1/2,
+              card(
+                card_header('Victoria',
+                            class = "bg-success"),
+                card_body(
+                  summarywidget(
+                    visitsDay,
+                    statistic = 'sum',
+                    selection = ~location=='Victoria',
+                    column = 'mean_visits',
+                    digits = 0
+                  ),
+                  style = 'font-size:26px'
+                ),
+                card_footer('visits per day')
+              ),
+              card(
+                card_header('Vancouver',
+                            class = "bg-warning"),
+                card_body(
+                  summarywidget(
+                    visitsDay,
+                    statistic = 'sum',
+                    selection = ~location=='Vancouver',
+                    column = 'mean_visits',
+                    digits = 0
+                  ),
+                  style = 'font-size:26px'
+                ),
+                card_footer('visits per day')
+              )
+    )
+  ),
+  average_barplot_by_membership_type(visitsDay,
+                                     x_var = 'day_as_number',
+                                     y_var = 'mean_visits',
+                                     grouper = 'day_as_number',
+                                     xlabel = "Day of Week",
+                                     ylabel = "Average Customers")
+)
 ```
 
 ### By Month
 ```{r}
-average_barplot_by_membership_type(RockVisitDat,
-                                   x_var = 'my_month',
-                                   y_var = 'visits',
-                                   grouper = 'month_as_number',
-                                   xlabel = "Month",
-                                   ylabel = "Average Customers")
+bscols(widths = c(4,8),
+       list(
+         accordion(
+           selected = I("all"),
+           accordion_item(
+             "Filters",
+             month_filter,
+           )
+         ),
+         card_grid(card_width = 1/2,
+                   card(
+                     card_header('Victoria',
+                                 class = "bg-success"),
+                     card_body(
+                       summarywidget(
+                         visitsMonth,
+                         statistic = 'sum',
+                         selection = ~location=='Victoria',
+                         column = 'mean_visits',
+                         digits = 0
+                       ),
+                       style = 'font-size:26px'
+                     ),
+                     card_footer('visits per day')
+                   ),
+                   card(
+                     card_header('Vancouver',
+                                 class = "bg-warning"),
+                     card_body(
+                       summarywidget(
+                         visitsMonth,
+                         statistic = 'sum',
+                         selection = ~location=='Vancouver',
+                         column = 'mean_visits',
+                         digits = 0
+                       ),
+                       style = 'font-size:26px'
+                     ),
+                     card_footer('visits per day')
+                   )
+         )
+       ),
+  average_barplot_by_membership_type(visitsMonth,
+                                     x_var = 'month_as_number',
+                                     y_var = 'mean_visits',
+                                     grouper = 'month_as_number',
+                                     xlabel = "Month",
+                                     ylabel = "Average Customers")
+)
 ```
-
-### All-in-One
-```{r}
-# labels <- function(variable, label) {
-#   list(
-#     args = list(list("x","transforms.groups"), list(variable,variable)), 
-#     label = label, 
-#     method = "restyle"
-#   )
-# }
-# 
-# fig <- RockVisitDat %>%
-#   plot_ly(
-#     x = ~day_of_week,
-#     y = ~visits,
-#     color = ~membership_type,
-#             colors = "Dark2",
-#             type = 'bar', 
-#             hoverinfo = 'text',
-#             hovertext = ~paste0(visits, 
-#                                 " visits on average"),
-#             transforms = list(
-#               list(
-#                 type = 'aggregate',
-#                 groups = ~c(),
-#                 aggregations = list(
-#                   list(
-#                     target = 'y', 
-#                     func = 'mean', 
-#                     enabled = T
-#                   )
-#                 )
-#               )
-#             )
-#   )
-# fig <- fig %>% layout(
-#   paper_bgcolor = "rgb(240, 240, 240)", 
-#   plot_bgcolor = "rgb(240, 240, 240)", 
-#   title = "<b>Visits to Rock Gym</b><br>use dropdown to change time period",
-#   # xaxis = list(
-#   #   type = 'date'
-#   # ),
-#   yaxis = list(
-#     title = "Average Customers"
-#   ),
-#   updatemenus = list(
-#     list(
-#       x = 0.1, 
-#       y = 1.15,
-#       active = 1, 
-#       showactive = TRUE,
-#       buttons = list(
-#         labels("hour_of_day", "Hour of Day"),
-#         labels("day_of_week", "Day of Week"),
-#         labels("my_month", "Month")
-#       )
-#     )
-#   )
-# )
-# 
-# fig
-```
-
 
 ```{js}
 function filter_default(){
-  document.getElementById("loc_filter").getElementsByClassName("selectized")[0].selectize.setValue(c("Vancouver"),false) 
-  document.getElementById("memb_type").getElementsByClassName("selectized")[0].selectize.setValue("Members",false)
+document.getElementById("loc_filter").getElementsByClassName("selectized")[0].selectize.setValue(c("Vancouver"),false) 
+document.getElementById("memb_type").getElementsByClassName("selectized")[0].selectize.setValue("Members",false)
 }
-    
+
 $(document).ready(filter_default);
 ```
 
