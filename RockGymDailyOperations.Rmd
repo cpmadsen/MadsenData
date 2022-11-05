@@ -22,11 +22,13 @@ output:
     vertical_layout: fill
 editor_options: 
   chunk_output_type: console
+runtime: shiny
 ---
 
 ```{r setup, include=FALSE}
 library(flexdashboard)
 library(bslib)
+library(shiny)
 library(tidyverse)
 library(plotly)
 library(lubridate)
@@ -91,58 +93,12 @@ rock_visit_dat = rock_visit_dat %>%
 
 
 ```{r make_shared_datasets}
-RockVisitDat = SharedData$new(rock_visit_dat)
-```
-
-```{r design_filters_and_buttons}
-hour_filter = filter_slider('hour_slider', 'Hours to Include', RockVisitDat, ~hour_of_day, min = 6, max = 22)
-
-day_filter = filter_slider('day_slider', 'Days to Include',  RockVisitDat, ~day_as_number, min = 1, max = 7)
-
-month_filter = filter_slider('day_slider',
-                             'Months to Include',
-                             RockVisitDat,
-                             ~month_as_number,
-                             min = 2,
-                             max = 6)
-
-location_select = filter_select('loc_filter', "Location", RockVisitDat, ~location)
-
-membership_type_select = filter_select("memb_type", "Membership Type", RockVisitDat, ~membership_type)
-```
-
-```{r plotting_functions}
-average_barplot_by_membership_type = function(reactive_data, x_var = NULL, y_var = NULL, grouper = NULL, xlabel = "X", ylabel = "Y", color_set = "Dark2"){
-  
-  p = reactive_data %>% 
-    plot_ly(x = ~.data[[x_var]], 
-            y = ~.data[[y_var]],
-            color = ~membership_type,
-            colors = color_set,
-            type = 'bar', 
-            hoverinfo = 'text',
-            hovertext = ~paste0(visits, 
-                                " visits on average"),
-            transforms = list(
-              list(
-                type = 'aggregate',
-                groups = ~.data[[grouper]],
-                aggregations = list(
-                  list(
-                    target = 'y', 
-                    func = 'mean', 
-                    enabled = T
-                  )
-                )
-              )
-            )
-    ) %>% 
-    layout(barmode = 'stack',
-           xaxis = list(title = xlabel),
-           yaxis = list(title = ylabel))
-  
-  p
-}
+RockVisitDat = reactive({
+  rock_visit_dat %>% 
+    filter(hour_of_day %in% input$hour_slider[1]:input$hour_slider[2]) %>% 
+    filter(day_as_number %in% input$day_slider,
+           month_as_number %in% input$month_slider)
+})
 ```
 
 Rock Gym is composed of two popular rock climbing gyms located in Victoria and Vancouver, British Columbia, that have been operating for 6 years. Use this dashboard to explore peak visit times by hour, day, or month.
@@ -157,14 +113,18 @@ accordion(
   selected = I("all"),
   accordion_item(
     "Sliders",
-    hour_filter,
-    day_filter,
-    month_filter
+    sliderInput("hour_slider","Hour of Day", min = 6, max = 22, value = c(6,22)),
+    sliderInput('day_slider', 'Days to Include', min = 1, max = 7, value = c(1,7)),
+    sliderInput('month_slider', 
+                'Months to Include',
+                min = 2,
+                max = 6,
+                value = c(2,6))
   ),
   accordion_item(
     "Categories",
-    location_select,
-    membership_type_select
+    checkboxGroupInput('location_checkboxes','Locations',choices = c("Victoria","Vancouver"), selected = c("Victoria","Vancouver"), inline = T),
+    checkboxGroupInput('membership_checkboxes',"Membership",choices = c("Drop-in","Members"))
   )
 )
 ```
@@ -175,32 +135,31 @@ Column {data-width=66% .tabset}
 ### By Hour
 
 ```{r}
-average_barplot_by_membership_type(RockVisitDat,
-                                   x_var = 'hour_of_day',
-                                   y_var = 'visits',
-                                   grouper = 'hour_of_day',
-                                   xlabel = "Hour of Day",
-                                   ylabel = "Average Customers")
+renderPlot({
+  RockVisitDat() %>% 
+  ggplot(aes(x = hour_of_day,y=visits)) + 
+  geom_col()
+})
 ```
 
 ### By Day
 ```{r}
-average_barplot_by_membership_type(RockVisitDat,
-                                   x_var = 'day_of_week',
-                                   y_var = 'visits',
-                                   grouper = 'day_as_number',
-                                   xlabel = "Day of Week",
-                                   ylabel = "Average Customers")
+# average_barplot_by_membership_type(RockVisitDat,
+#                                    x_var = 'day_of_week',
+#                                    y_var = 'visits',
+#                                    grouper = 'day_as_number',
+#                                    xlabel = "Day of Week",
+#                                    ylabel = "Average Customers")
 ```
 
 ### By Month
 ```{r}
-average_barplot_by_membership_type(RockVisitDat,
-                                   x_var = 'my_month',
-                                   y_var = 'visits',
-                                   grouper = 'month_as_number',
-                                   xlabel = "Month",
-                                   ylabel = "Average Customers")
+# average_barplot_by_membership_type(RockVisitDat,
+#                                    x_var = 'my_month',
+#                                    y_var = 'visits',
+#                                    grouper = 'month_as_number',
+#                                    xlabel = "Month",
+#                                    ylabel = "Average Customers")
 ```
 
 ### All-in-One
