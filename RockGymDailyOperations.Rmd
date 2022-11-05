@@ -1,0 +1,281 @@
+---
+title: "Rock Gym Daily Operations"
+output: 
+  flexdashboard::flex_dashboard:
+    theme:
+      bg: "white"
+      fg: "black" 
+      primary: "#69bf86"
+      secondary: "#74c476"
+      highlight_font: Ubuntu
+      base_font:
+        google: Fira Sans
+      code_font:
+        google: JetBrains Mono
+      navbar_bg: "#69bf86"
+      body_color: "#69bf86"
+      accordion_button_active_bg: "#69bf86"
+      accordion_button_active_color: 'black'
+      bs_accordion_color: "#69bf86"
+      light: "white"
+    orientation: columns
+    vertical_layout: fill
+editor_options: 
+  chunk_output_type: console
+runtime: shiny
+---
+
+```{r setup, include=FALSE}
+library(flexdashboard)
+library(bslib)
+library(tidyverse)
+library(plotly)
+library(lubridate)
+library(scales)
+library(crosstalk)
+
+knitr::opts_chunk$set(warning = F,message = F)
+```
+
+```{r global read_in_data, include = F}
+
+rock_visit_dat = read_csv('F:/R Projects/MadsenData_data/data/rock_visit_data.csv')
+
+rock_visit_dat = rock_visit_dat %>% 
+  mutate(days_in_month = case_when(
+    month == "Jan" ~ 31,
+    month == "Feb" ~ 28,
+    month == "Mar" ~ 31,
+    month == "Apr" ~ 30,
+    month == "May" ~ 31,
+    month == "Jun" ~ 30
+  )) %>% 
+  group_by(month) %>% 
+  group_split() %>% 
+  map( ~ {
+    crossing(.x,1:.x$days_in_month) %>% 
+      distinct() %>% 
+      mutate(visits = visits + sample(c(-3:3,1)))
+  }) %>% 
+  bind_rows() %>% 
+  mutate(month = factor(month, levels = c("Jan","Feb","Mar","Apr","May","Jun")))
+
+rock_visit_dat = rock_visit_dat %>% 
+  select(-visits) %>% 
+  rename(my_month = month) %>% 
+  pivot_longer(c("drop_ins","members"), names_to = 'membership_type', values_to = 'visits') %>% 
+  mutate(membership_type = case_when(
+    membership_type == "drop_ins" ~ "Drop-ins",
+    T ~ "Members"
+  )) %>% 
+  mutate(hour_of_day = as.numeric(str_remove(hour_of_day, "H"))) %>% 
+  mutate(day_as_number = case_when(
+    day_of_week == "Monday" ~ 1,
+    day_of_week == "Tuesday" ~ 2,
+    day_of_week == "Wednesday" ~ 3,
+    day_of_week == "Thursday" ~ 4,
+    day_of_week == "Friday" ~ 5,
+    day_of_week == "Saturday" ~ 6,
+    day_of_week == "Sunday" ~ 7
+  )) %>% 
+  mutate(month_as_number = case_when(
+    my_month == "Jan" ~ 1,
+    my_month == "Feb" ~ 2,
+    my_month == "Mar" ~ 3,
+    my_month == "Apr" ~ 4,
+    my_month == "May" ~ 5,
+    my_month == "Jun" ~ 6,
+  )) %>% 
+  mutate(day_of_week = factor(day_of_week, levels = levels(wday(1,label = T,abbr=F,week_start = 1)))) %>% 
+  mutate(my_month = factor(my_month, levels = c("Jan","Feb","Mar","Apr","May","Jun")))
+```
+
+
+```{r make_shared_datasets}
+# RockVisitDat = SharedData$new(rock_visit_dat)
+```
+
+```{r design_filters_and_buttons}
+# hour_filter = filter_slider('hour_slider', 'Hours to Include', RockVisitDat, ~hour_of_day, min = 6, max = 22)
+# 
+# day_filter = filter_slider('day_slider', 'Days to Include',  RockVisitDat, ~day_as_number, min = 1, max = 7)
+# 
+# month_filter = filter_slider('day_slider', 
+#                              'Months to Include', 
+#                              RockVisitDat, 
+#                              ~month_as_number, 
+#                              min = 2, 
+#                              max = 6)
+# 
+# location_select = filter_select('loc_filter', "Location", RockVisitDat, ~location)
+# 
+# membership_type_select = filter_select("memb_type", "Membership Type", RockVisitDat, ~membership_type)
+```
+
+```{r plotting_functions}
+average_barplot_by_membership_type = function(reactive_data, x_var = NULL, y_var = NULL, grouper = NULL, xlabel = "X", ylabel = "Y", color_set = "Dark2"){
+  
+  p = reactive_data %>% 
+    plot_ly(x = ~.data[[x_var]], 
+            y = ~.data[[y_var]],
+            color = ~membership_type,
+            colors = color_set,
+            type = 'bar', 
+            hoverinfo = 'text',
+            hovertext = ~paste0(visits, 
+                                " visits on average"),
+            transforms = list(
+              list(
+                type = 'aggregate',
+                groups = ~.data[[grouper]],
+                aggregations = list(
+                  list(
+                    target = 'y', 
+                    func = 'mean', 
+                    enabled = T
+                  )
+                )
+              )
+            )
+    ) %>% 
+    layout(barmode = 'stack',
+           xaxis = list(title = xlabel),
+           yaxis = list(title = ylabel))
+  
+  p
+}
+```
+
+Rock Gym is composed of two popular rock climbing gyms located in Victoria and Vancouver, British Columbia, that have been operating for 6 years. Use this dashboard to explore peak visit times by hour, day, or month.
+
+Column {data-width=33%}
+------------------------------------------------------------------
+
+### Filters
+
+```{r}
+accordion(
+  selected = I("all"),
+  accordion_item(
+    "Sliders",
+    sliderInput("hour_of_day","Hour of Day",min = 6, max = 22),
+    sliderInput('day_slider', 'Days to Include', min = 1, max = 7),
+    sliderInput('month_slider', 
+                'Months to Include',
+                min = 2,
+                max = 6),
+  ),
+  accordion_item(
+    "Categories",
+    checkboxGroupInput('location_checkboxes','Locations',choices = c("Victoria","Vancouver"), selected = c("Victoria","Vancouver"), inline = T),
+    checkboxGroupInput('membership_checkboxes',"Membership",choices = c("Drop-in","Members"))
+  )
+)
+```
+
+Column {data-width=66% .tabset}
+-------------------------------------------------------------------
+
+### By Hour
+
+```{r}
+average_barplot_by_membership_type(RockVisitDat,
+                                   x_var = 'hour_of_day',
+                                   y_var = 'visits',
+                                   grouper = 'hour_of_day',
+                                   xlabel = "Hour of Day",
+                                   ylabel = "Average Customers")
+```
+
+### By Day
+```{r}
+average_barplot_by_membership_type(RockVisitDat,
+                                   x_var = 'day_of_week',
+                                   y_var = 'visits',
+                                   grouper = 'day_as_number',
+                                   xlabel = "Day of Week",
+                                   ylabel = "Average Customers")
+```
+
+### By Month
+```{r}
+average_barplot_by_membership_type(RockVisitDat,
+                                   x_var = 'my_month',
+                                   y_var = 'visits',
+                                   grouper = 'month_as_number',
+                                   xlabel = "Month",
+                                   ylabel = "Average Customers")
+```
+
+### All-in-One
+```{r}
+# labels <- function(variable, label) {
+#   list(
+#     args = list(list("x","transforms.groups"), list(variable,variable)), 
+#     label = label, 
+#     method = "restyle"
+#   )
+# }
+# 
+# fig <- RockVisitDat %>%
+#   plot_ly(
+#     x = ~day_of_week,
+#     y = ~visits,
+#     color = ~membership_type,
+#             colors = "Dark2",
+#             type = 'bar', 
+#             hoverinfo = 'text',
+#             hovertext = ~paste0(visits, 
+#                                 " visits on average"),
+#             transforms = list(
+#               list(
+#                 type = 'aggregate',
+#                 groups = ~c(),
+#                 aggregations = list(
+#                   list(
+#                     target = 'y', 
+#                     func = 'mean', 
+#                     enabled = T
+#                   )
+#                 )
+#               )
+#             )
+#   )
+# fig <- fig %>% layout(
+#   paper_bgcolor = "rgb(240, 240, 240)", 
+#   plot_bgcolor = "rgb(240, 240, 240)", 
+#   title = "<b>Visits to Rock Gym</b><br>use dropdown to change time period",
+#   # xaxis = list(
+#   #   type = 'date'
+#   # ),
+#   yaxis = list(
+#     title = "Average Customers"
+#   ),
+#   updatemenus = list(
+#     list(
+#       x = 0.1, 
+#       y = 1.15,
+#       active = 1, 
+#       showactive = TRUE,
+#       buttons = list(
+#         labels("hour_of_day", "Hour of Day"),
+#         labels("day_of_week", "Day of Week"),
+#         labels("my_month", "Month")
+#       )
+#     )
+#   )
+# )
+# 
+# fig
+```
+
+
+```{js}
+function filter_default(){
+  document.getElementById("loc_filter").getElementsByClassName("selectized")[0].selectize.setValue(c("Vancouver"),false) 
+  document.getElementById("memb_type").getElementsByClassName("selectized")[0].selectize.setValue("Members",false)
+}
+    
+$(document).ready(filter_default);
+```
+
